@@ -1,11 +1,13 @@
 import AppKit
 import AVFoundation
 import SwiftUI
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let port = 8010
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let stateItem = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private let lastItem = NSMenuItem(title: "No dictation yet", action: #selector(copyLast), keyEquivalent: "")
     private let recorder = AudioRecorder()
     private let hotkey = HotkeyMonitor()
@@ -213,6 +215,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dash = NSMenuItem(title: "Open Dashboard…", action: #selector(openDashboard), keyEquivalent: "d")
         dash.target = self
         menu.addItem(dash)
+        loginItem.target = self
+        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Murmrflow", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -231,6 +236,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         stateItem.title = text
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled { try service.unregister() } else { try service.register() }
+        } catch {
+            NSLog("launch at login failed: \(error)")
+        }
+        loginItem.state = service.status == .enabled ? .on : .off
+        // macOS may need the user to approve the item once in System Settings → General → Login Items.
+        if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
     @objc private func openDashboard() {
