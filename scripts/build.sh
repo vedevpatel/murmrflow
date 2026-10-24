@@ -33,6 +33,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 # Use a stable self-signed identity if present so macOS keeps permission grants across rebuilds.
-IDENTITY="${MURMRFLOW_SIGN_IDENTITY:--}"
+IDENTITY="${MURMRFLOW_SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  if security find-identity -v -p codesigning | grep -q '"Murmrflow Dev"'; then IDENTITY="Murmrflow Dev"; else IDENTITY="-"; fi
+fi
 codesign --force --sign "$IDENTITY" "$APP"
 echo "Built $APP (signed with: $IDENTITY)"
