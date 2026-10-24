@@ -22,7 +22,7 @@ private enum Tab: String, CaseIterable, Identifiable {
 
 /// Numbers shown on the home screen, derived from the stored dictations.
 private struct Metrics {
-    static let typingWPM = 40.0
+    static let typingWPM = 80.0
 
     let entries: [DictationEntry]
     private let cal = Calendar.current
