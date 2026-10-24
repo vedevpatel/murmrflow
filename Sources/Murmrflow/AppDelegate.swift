@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let port = 8010
@@ -15,6 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var finalsText = ""
     private var pendingSamples: [Int16] = []
     private var streamFailed = false
+    private var dictationSeconds = 0.0
+    private var dictationRecorded = false
+    private var targetAppName: String?
+    private var targetAppBundle: String?
+    private var dashboardWindow: NSWindow?
     private var state: State = .loading
     private var lastText = ""
     private var recording = false
@@ -25,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         setState(.loading)
+        if CommandLine.arguments.contains("--dashboard") { openDashboard() }
 
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
@@ -49,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         finalsText = ""
         lastText = ""
         streamFailed = false
+        dictationRecorded = false
+        let target = NSWorkspace.shared.frontmostApplication
+        targetAppName = target?.localizedName
+        targetAppBundle = target?.bundleIdentifier
         let stream = StreamingSession(port: port)
         stream.onPartial = { [weak self] in self?.overlay.update($0) }
         stream.onFinal = { [weak self] in self?.commit($0) }
@@ -82,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         pendingSamples = samples
+        dictationSeconds = seconds
         setState(.transcribing)
         if streamFailed {
             fallbackToBatch()
@@ -116,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             commit(full)
         }
         overlay.hide()
+        recordDictation()
         if state != .needsAccessibility { setState(.ready) }
     }
 
@@ -131,13 +144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One-shot transcription of the whole recording, used when the live stream breaks.
     private func fallbackToBatch() {
         let samples = pendingSamples
-        guard finalsText.isEmpty, !samples.isEmpty else { overlay.hide(); setState(.ready); return }
+        guard finalsText.isEmpty, !samples.isEmpty else { overlay.hide(); recordDictation(); setState(.ready); return }
         let wav = AudioRecorder.wav(from: samples)
         Task {
             do {
                 let text = try await client.transcribe(wav: wav).trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
                     if !text.isEmpty { self.commit(text) }
+                    self.recordDictation()
                     if self.state != .needsAccessibility { self.setState(.ready) }
                 }
             } catch {
@@ -145,6 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run { self.setState(.error) }
             }
         }
+    }
+
+    private func recordDictation() {
+        guard !dictationRecorded else { return }
+        dictationRecorded = true
+        StatsStore.shared.record(text: lastText, seconds: dictationSeconds, appName: targetAppName, appBundle: targetAppBundle)
     }
 
     private func paste(_ text: String) {
@@ -190,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         lastItem.target = self
         menu.addItem(lastItem)
+        let dash = NSMenuItem(title: "Open Dashboard…", action: #selector(openDashboard), keyEquivalent: "d")
+        dash.target = self
+        menu.addItem(dash)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Murmrflow", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -208,6 +231,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         stateItem.title = text
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
+    }
+
+    @objc private func openDashboard() {
+        if dashboardWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 660),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                  backing: .buffered, defer: false)
+            window.contentView = NSHostingView(rootView: DashboardView(store: .shared))
+            window.title = "Murmrflow"
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.isReleasedWhenClosed = false
+            window.center()
+            dashboardWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        dashboardWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func copyLast() {
