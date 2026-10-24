@@ -1,0 +1,5 @@
+.venv/
+models/
+.build/
+build/
+.DS_Store
