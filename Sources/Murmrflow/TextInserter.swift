@@ -8,12 +8,12 @@ enum TextInserter {
     private static var restore: DispatchWorkItem?
 
     /// Returns false when Accessibility is missing; the text is then left on the clipboard so it can be pasted by hand.
+    /// `rich` adds HTML and RTF versions next to the plain text; the target app picks the one it understands.
     @discardableResult
-    static func insert(_ text: String) -> Bool {
+    static func insert(_ text: String, rich: (html: String, rtf: Data)? = nil) -> Bool {
         let pb = NSPasteboard.general
         guard AXIsProcessTrusted() else {
-            pb.clearContents()
-            pb.setString(text, forType: .string)
+            write(text, rich: rich, to: pb)
             return false
         }
         restore?.cancel()
@@ -22,8 +22,7 @@ enum TextInserter {
         }
         savedClipboard = saved
 
-        pb.clearContents()
-        pb.setString(text, forType: .string)
+        write(text, rich: rich, to: pb)
         pressCommandV()
 
         // Give the target app time to read the pasteboard before putting the old contents back.
@@ -39,6 +38,17 @@ enum TextInserter {
         restore = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
         return true
+    }
+
+    private static func write(_ text: String, rich: (html: String, rtf: Data)?, to pb: NSPasteboard) {
+        pb.clearContents()
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        if let rich {
+            item.setString(rich.html, forType: .html)
+            item.setData(rich.rtf, forType: .rtf)
+        }
+        pb.writeObjects([item])
     }
 
     private static func pressCommandV() {
