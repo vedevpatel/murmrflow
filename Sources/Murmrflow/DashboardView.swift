@@ -224,23 +224,34 @@ private struct HistoryView: View {
 
 private struct HistoryRow: View {
     let entry: DictationEntry
+    /// Shows the transcript as spoken, before cleanup rewrote it.
+    @State private var showsRaw = false
+
+    private var shownText: String? { showsRaw ? entry.rawText : entry.text }
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             Text(entry.date.formatted(date: .omitted, time: .shortened))
                 .font(.callout).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
-                if let text = entry.text {
+                if let text = shownText {
                     Text(text).textSelection(.enabled)
                 } else {
                     Text("\(entry.words) words").foregroundStyle(.secondary)
                 }
-                if let app = entry.appName {
-                    Text(app).font(.caption).foregroundStyle(.secondary)
+                let caption = [entry.appName, showsRaw ? "Original transcript" : nil].compactMap { $0 }.joined(separator: " · ")
+                if !caption.isEmpty {
+                    Text(caption).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 0)
-            if let text = entry.text {
+            if entry.rawText != nil {
+                Button { showsRaw.toggle() } label: {
+                    Image(systemName: showsRaw ? "arrow.uturn.forward" : "arrow.uturn.backward")
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help(showsRaw ? "Redo AI edit" : "Undo AI edit")
+            }
+            if let text = shownText {
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
