@@ -9,12 +9,13 @@ private enum Theme {
 }
 
 private enum Tab: String, CaseIterable, Identifiable {
-    case home = "Home", history = "History", settings = "Settings"
+    case home = "Home", history = "History", dictionary = "Dictionary", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .home: return "house"
         case .history: return "clock.arrow.circlepath"
+        case .dictionary: return "character.book.closed"
         case .settings: return "gearshape"
         }
     }
@@ -77,6 +78,7 @@ struct DashboardView: View {
                 switch tab {
                 case .home: HomeView(metrics: Metrics(entries: store.entries))
                 case .history: HistoryView(entries: store.entries, savesText: store.saveText)
+                case .dictionary: DictionaryView()
                 case .settings: SettingsView(store: store)
                 }
             }
@@ -260,6 +262,67 @@ private struct HistoryRow: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+private struct DictionaryView: View {
+    @ObservedObject private var dictionary = PersonalDictionary.shared
+    @State private var term = ""
+    @State private var heardAs = ""
+    @FocusState private var termFocused: Bool
+
+    private func add() {
+        dictionary.add(term: term, heardAs: heardAs)
+        term = ""
+        heardAs = ""
+        termFocused = true
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Dictionary").font(.system(size: 30, weight: .semibold))
+                Text("Names and terms written your way in every dictation. Add how the transcript tends to mishear a word, like \"murmur flow\" for Murmrflow, and it is replaced even with cleanup off. With cleanup on, the model also fixes mishearings it can tell are close.")
+                    .font(.callout).foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        TextField("Word or name", text: $term).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+                            .focused($termFocused)
+                        TextField("Often heard as (optional, comma-separated)", text: $heardAs).textFieldStyle(.roundedBorder)
+                        Button("Add", action: add)
+                            .disabled(term.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .onSubmit(add)
+                }
+                .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border))
+
+                if dictionary.entries.isEmpty {
+                    Text("No words yet.").foregroundStyle(.secondary)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(dictionary.entries.enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 { Divider() }
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                Text(entry.term).font(.body.weight(.medium)).textSelection(.enabled)
+                                if !entry.heardAs.isEmpty {
+                                    Text("heard as " + entry.heardAs.joined(separator: ", ")).font(.callout).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                Button { dictionary.remove(entry) } label: { Image(systemName: "trash") }
+                                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove")
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                        }
+                    }
+                    .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border))
+                }
+            }
+            .padding(.horizontal, 32).padding(.top, 38).padding(.bottom, 28)
+        }
     }
 }
 
