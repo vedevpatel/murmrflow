@@ -8,6 +8,8 @@ struct DictationEntry: Identifiable {
     let words: Int
     let seconds: Double
     let text: String?
+    /// The transcript before cleanup rewrote it; nil when cleanup did not change it.
+    let rawText: String?
     let appName: String?
 }
 
@@ -51,6 +53,10 @@ final class StatsStore: ObservableObject {
             try? db.run("CREATE INDEX IF NOT EXISTS idx_dictations_started ON dictations(started_at)")
             db.userVersion = 1
         }
+        if db.userVersion < 2 {
+            try? db.run("ALTER TABLE dictations ADD COLUMN raw_text TEXT")
+            db.userVersion = 2
+        }
         importLegacyLog()
     }
 
@@ -70,21 +76,23 @@ final class StatsStore: ObservableObject {
 
     func reload() {
         guard let db else { return }
-        entries = (try? db.query("SELECT id, started_at, seconds, words, text, app_name FROM dictations ORDER BY started_at") { s in
+        entries = (try? db.query("SELECT id, started_at, seconds, words, text, app_name, raw_text FROM dictations ORDER BY started_at") { s in
             DictationEntry(id: sqlite3_column_int64(s, 0),
                            date: Date(timeIntervalSince1970: sqlite3_column_double(s, 1)),
                            words: Int(sqlite3_column_int64(s, 3)),
                            seconds: sqlite3_column_double(s, 2),
                            text: Database.text(s, 4),
+                           rawText: Database.text(s, 6),
                            appName: Database.text(s, 5))
         }) ?? []
     }
 
-    func record(text: String, seconds: Double, appName: String?, appBundle: String?) {
+    func record(text: String, raw: String, seconds: Double, appName: String?, appBundle: String?) {
         let words = text.split(whereSeparator: \.isWhitespace).count
         guard words > 0, let db else { return }
-        try? db.run("INSERT INTO dictations (started_at, seconds, words, text, app_bundle, app_name) VALUES (?, ?, ?, ?, ?, ?)",
-                    [Date().timeIntervalSince1970, seconds, words, saveText ? text : nil, appBundle, appName])
+        let rawText = saveText && raw != text ? raw : nil
+        try? db.run("INSERT INTO dictations (started_at, seconds, words, text, raw_text, app_bundle, app_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [Date().timeIntervalSince1970, seconds, words, saveText ? text : nil, rawText, appBundle, appName])
         reload()
     }
 
