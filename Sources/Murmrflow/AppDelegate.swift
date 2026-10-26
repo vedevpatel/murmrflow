@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastText = ""
     private var recording = false
     private var recordStart = Date()
+    /// With cleanup on, phrases are held back and pasted once the whole dictation has been rewritten.
+    private var buffering = false
+    private var cleaning = false
 
     private enum State { case loading, ready, recording, transcribing, needsPermission, needsAccessibility, error }
 
@@ -54,7 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Dictation flow
 
     private func beginRecording() {
-        guard !recording else { return }
+        guard !recording, !cleaning else { return }
+        buffering = CleanupSettings.shared.isActive
         finalsText = ""
         lastText = ""
         streamFailed = false
@@ -110,13 +114,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A finished phrase: paste it into the focused app.
+    /// A finished phrase: paste it into the focused app, or hold it for cleanup.
     private func commit(_ phrase: String) {
         let text = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         finalsText += (finalsText.isEmpty ? "" : " ") + text
         overlay.update("")
-        paste(text)
+        if !buffering { paste(text) }
+    }
+
+    /// The transcript is complete: rewrite and paste it if it was held back, then record the dictation.
+    private func finishDictation() {
+        overlay.hide()
+        guard buffering, !finalsText.isEmpty else {
+            recordDictation()
+            if state != .needsAccessibility { setState(.ready) }
+            return
+        }
+        let raw = finalsText
+        cleaning = true
+        Task {
+            let text = await Cleanup.run(raw, appName: targetAppName, appBundle: targetAppBundle, settings: .shared)
+            await MainActor.run {
+                self.cleaning = false
+                if !text.isEmpty { self.paste(text) }
+                self.recordDictation()
+                if self.state != .needsAccessibility { self.setState(.ready) }
+            }
+        }
     }
 
     private func streamDone(_ full: String) {
@@ -129,9 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if finalsText.isEmpty {
             commit(full)
         }
-        overlay.hide()
-        recordDictation()
-        if state != .needsAccessibility { setState(.ready) }
+        finishDictation()
     }
 
     private func streamError(_ error: Error) {
@@ -146,6 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// One-shot transcription of the whole recording, used when the live stream breaks.
     private func fallbackToBatch() {
         let samples = pendingSamples
+        // Held-back phrases were never pasted, so the whole recording can be transcribed again.
+        if buffering { finalsText = "" }
         guard finalsText.isEmpty, !samples.isEmpty else { overlay.hide(); recordDictation(); setState(.ready); return }
         let wav = AudioRecorder.wav(from: samples)
         Task {
@@ -153,8 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let text = try await client.transcribe(wav: wav).trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
                     if !text.isEmpty { self.commit(text) }
-                    self.recordDictation()
-                    if self.state != .needsAccessibility { self.setState(.ready) }
+                    self.finishDictation()
                 }
             } catch {
                 NSLog("transcription failed: \(error)")
