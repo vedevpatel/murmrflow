@@ -120,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !text.isEmpty else { return }
         finalsText += (finalsText.isEmpty ? "" : " ") + text
         overlay.update("")
-        if !buffering { paste(text) }
+        if !buffering { paste(PersonalDictionary.shared.apply(text)) }
     }
 
     /// The transcript is complete: rewrite and paste it if it was held back, then record the dictation.
@@ -132,9 +132,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let raw = finalsText
+        let dictionary = PersonalDictionary.shared
         cleaning = true
         Task {
-            let text = await Cleanup.run(raw, appName: targetAppName, appBundle: targetAppBundle, settings: .shared)
+            // Applied after cleanup as well, since the model can still re-case or re-split a term.
+            let text = dictionary.apply(await Cleanup.run(dictionary.apply(raw), appName: targetAppName, appBundle: targetAppBundle,
+                                                          vocabulary: dictionary.terms, settings: .shared))
             await MainActor.run {
                 self.cleaning = false
                 if !text.isEmpty { self.paste(text, whole: true) }
@@ -175,7 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let wav = AudioRecorder.wav(from: samples)
         Task {
             do {
-                let text = try await client.transcribe(wav: wav).trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = try await client.transcribe(wav: wav, hotwords: PersonalDictionary.shared.terms)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
                     if !text.isEmpty { self.commit(text) }
                     self.finishDictation()
