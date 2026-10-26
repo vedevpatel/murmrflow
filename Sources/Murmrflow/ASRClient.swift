@@ -13,13 +13,19 @@ struct ASRClient {
         return (resp as? HTTPURLResponse)?.statusCode == 200
     }
 
-    func transcribe(wav: Data) async throws -> String {
+    /// `hotwords` are names and terms the decoder should favour; the server takes at most 25.
+    func transcribe(wav: Data, hotwords: [String] = []) async throws -> String {
         let boundary = "murmrflow-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
             body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".data(using: .utf8)!)
         }
         field("model", "phonon-2.5-en")
+        if !hotwords.isEmpty, let list = try? JSONSerialization.data(withJSONObject: Array(hotwords.prefix(25))) {
+            field("hotwords", String(decoding: list, as: UTF8.self))
+            // The default bonus (2) rarely changes the output; 8 fixes made-up names without pulling in near-misses.
+            field("hotword_lambda", "8")
+        }
         body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(wav)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
