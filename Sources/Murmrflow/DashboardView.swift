@@ -66,6 +66,7 @@ private struct Metrics {
 
 struct DashboardView: View {
     @ObservedObject var store: StatsStore
+    @ObservedObject private var cleanup = CleanupSettings.shared
     @State private var tab: Tab = .home
 
     var body: some View {
@@ -108,7 +109,8 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Label("Runs entirely on this Mac", systemImage: "lock.fill")
+            Label(cleanup.isActive ? "Transcribed on this Mac, cleaned up by Groq" : "Runs entirely on this Mac",
+                  systemImage: cleanup.isActive ? "cloud" : "lock.fill")
                 .font(.caption).foregroundStyle(.secondary).padding(12)
         }
         .padding(.horizontal, 10)
@@ -252,6 +254,7 @@ private struct HistoryRow: View {
 
 private struct SettingsView: View {
     @ObservedObject var store: StatsStore
+    @ObservedObject private var cleanup = CleanupSettings.shared
     @State private var confirmDelete = false
 
     var body: some View {
@@ -259,9 +262,28 @@ private struct SettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Settings").font(.system(size: 30, weight: .semibold))
 
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Clean up dictations with AI", isOn: $cleanup.enabled).font(.headline)
+                    Text("Removes filler words and false starts, applies self-corrections like \"Thursday, no, Wednesday\", fixes punctuation and formats lists, then pastes the result once you stop talking. The transcript and the name of the app you're typing into are sent to Groq; audio never leaves this Mac. If Groq is slow or unreachable, the raw transcript is pasted.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    SecureField("Groq API key", text: $cleanup.apiKey).textFieldStyle(.roundedBorder).frame(maxWidth: 420)
+                    HStack(spacing: 8) {
+                        TextField("Model", text: $cleanup.model).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                        if cleanup.model != CleanupSettings.defaultModel {
+                            Button("Reset") { cleanup.model = CleanupSettings.defaultModel }
+                        }
+                    }
+                    Text("If this model is rate-limited, Murmrflow switches to \(CleanupSettings.fallbackModels.filter { $0 != cleanup.model }.joined(separator: ", then ")).")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Link("Get a key at console.groq.com", destination: URL(string: "https://console.groq.com/keys")!).font(.callout)
+                }
+                .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border))
+
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Save transcript text", isOn: $store.saveText).font(.headline)
-                    Text("Keeps what you dictated in a local database so you can browse and copy it in History, and so it can be used later for things like custom vocabulary or rewrite features. Off by default; word counts and timing are always kept. Nothing leaves this Mac.")
+                    Text("Keeps what you dictated in a local database so you can browse and copy it in History, and so it can be used later for things like custom vocabulary or rewrite features. Off by default; word counts and timing are always kept. The database stays on this Mac.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 .padding(18).frame(maxWidth: .infinity, alignment: .leading)
