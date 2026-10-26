@@ -65,6 +65,25 @@ private enum Keychain {
     }
 }
 
+/// The kind of app a dictation is going into, which decides its style and how it is pasted.
+enum AppKind {
+    case chat, email, code, general
+
+    private static let chatApps: Set = ["com.apple.MobileSMS", "net.whatsapp.WhatsApp", "com.tinyspeck.slackmacgap", "com.hnc.Discord",
+                                        "ru.keepcoder.Telegram", "com.facebook.archon", "us.zoom.xos"]
+    private static let emailApps: Set = ["com.apple.mail", "com.microsoft.Outlook", "com.superhuman.electron", "com.readdle.smartemail-Mac"]
+    private static let codeApps: Set = ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
+                                        "com.apple.dt.Xcode", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed"]
+
+    init(bundle: String?) {
+        guard let bundle else { self = .general; return }
+        if Self.chatApps.contains(bundle) { self = .chat }
+        else if Self.emailApps.contains(bundle) { self = .email }
+        else if Self.codeApps.contains(bundle) { self = .code }
+        else { self = .general }
+    }
+}
+
 /// Turns a raw transcript into the text the speaker meant to write: fillers, false starts and
 /// self-corrections removed, punctuation and formatting fixed, tone adjusted to the target app.
 enum Cleanup {
@@ -167,16 +186,12 @@ enum Cleanup {
 
     /// A formatting hint picked from the app the text is going into.
     private static func style(for bundle: String?) -> String {
-        let chat: Set = ["com.apple.MobileSMS", "net.whatsapp.WhatsApp", "com.tinyspeck.slackmacgap", "com.hnc.Discord",
-                         "ru.keepcoder.Telegram", "com.facebook.archon", "us.zoom.xos"]
-        let email: Set = ["com.apple.mail", "com.microsoft.Outlook", "com.superhuman.electron", "com.readdle.smartemail-Mac"]
-        let code: Set = ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
-                         "com.apple.dt.Xcode", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed"]
-        guard let bundle else { return "general" }
-        if chat.contains(bundle) { return "chat: casual, short; no sign-offs; a trailing period on a single short sentence is optional" }
-        if email.contains(bundle) { return "email: greeting on its own line, then a blank line, then the body; a spoken closing goes in its own final paragraph" }
-        if code.contains(bundle) { return "technical: keep commands, flags, paths and identifiers exactly; likely a prompt or terminal input" }
-        return "general"
+        switch AppKind(bundle: bundle) {
+        case .chat: return "chat: casual, short; no sign-offs"
+        case .email: return "email: greeting on its own line, then a blank line, then the body; a spoken closing goes in its own final paragraph"
+        case .code: return "technical: keep commands, flags, paths and identifiers exactly; likely a prompt or terminal input"
+        case .general: return "general"
+        }
     }
 
     private static let systemPrompt = """
@@ -198,6 +213,10 @@ enum Cleanup {
 
         Formatting:
         - Use a bulleted or numbered list only when the speaker clearly enumerates items or asks for a list. Ordinary prose stays prose.
+        - "Number one", "number 2", "bullet" and similar spoken markers always start a new list item. Drop the marker and put each item on its own line as "1.", "2.", "3." (or "-" for bullets). Words spoken before the first marker stay as an intro line ending in a colon. Keep every other word of the item.
+        - When an item is a heading followed by its contents, write "Heading: Contents", with a capital letter on both the heading and the first word after the colon.
+        - Inside an item, a series of three or more always gets commas and "and" before the last one, even when the speaker did not say "and": "pizza, pasta, steak, lobster" -> "Pizza, pasta, steak, and lobster". An "and" spoken right before a marker ("and number three") belongs to no item; drop it.
+        - List items get no trailing period unless an item is a full sentence.
         - Break long dictations into paragraphs at topic changes. Never over-format a short dictation.
         - Follow STYLE for the target app.
 
@@ -225,6 +244,12 @@ enum Cleanup {
         1. Passports
         2. Chargers
         3. Snacks
+
+        Input: Here's the plan, number one, groceries. eggs, milk, bread. Number two. Errands. bank, post office, and number 3, call mom.
+        Output: Here's the plan:
+        1. Groceries: Eggs, milk, and bread
+        2. Errands: Bank and post office
+        3. Call Mom
 
         Output only the cleaned text: no preamble, quotes, labels or commentary. If the transcript is empty or only filler, output exactly: EMPTY
         """
