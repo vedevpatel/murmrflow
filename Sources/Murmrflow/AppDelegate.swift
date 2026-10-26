@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let text = await Cleanup.run(raw, appName: targetAppName, appBundle: targetAppBundle, settings: .shared)
             await MainActor.run {
                 self.cleaning = false
-                if !text.isEmpty { self.paste(text) }
+                if !text.isEmpty { self.paste(text, whole: true) }
                 self.recordDictation()
                 if self.state != .needsAccessibility { self.setState(.ready) }
             }
@@ -190,13 +190,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recordDictation() {
         guard !dictationRecorded else { return }
         dictationRecorded = true
-        StatsStore.shared.record(text: lastText, seconds: dictationSeconds, appName: targetAppName, appBundle: targetAppBundle)
+        StatsStore.shared.record(text: lastText, raw: finalsText, seconds: dictationSeconds, appName: targetAppName, appBundle: targetAppBundle)
     }
 
-    private func paste(_ text: String) {
+    /// `whole` is a complete cleaned dictation rather than one streamed phrase of it.
+    private func paste(_ text: String, whole: Bool = false) {
         lastText += (lastText.isEmpty ? "" : " ") + text
         lastItem.title = "Last: " + String(text.prefix(50))
-        if TextInserter.insert(text + " ") {
+        let kind = AppKind(bundle: targetAppBundle)
+        var out = whole && kind == .chat ? CursorContext.droppingChatPeriod(text) : text
+        // Without a readable field, a trailing space keeps the next dictation from running into this one.
+        out = CursorContext.read()?.fit(out) ?? out + " "
+        let rich = kind == .general || kind == .email ? RichText.flavors(for: out) : nil
+        if TextInserter.insert(out, rich: rich) {
             if state == .needsAccessibility { setState(recording ? .recording : .transcribing) }
         } else {
             _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
