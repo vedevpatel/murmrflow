@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkey.onPress = { [weak self] in self?.beginRecording() }
         hotkey.onRelease = { [weak self] in self?.finishRecording() }
+        hotkey.onKeyDown = { EditLearner.shared.noteKeyDown() }
         waitForHotkeyPermission()
 
         Task {
@@ -58,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func beginRecording() {
         guard !recording, !cleaning else { return }
+        // Fixes made to the last dictation must be learned before this one is cleaned up.
+        EditLearner.shared.finish()
         buffering = CleanupSettings.shared.isActive
         finalsText = ""
         lastText = ""
@@ -133,11 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let raw = finalsText
         let dictionary = PersonalDictionary.shared
+        let edits = StatsStore.shared.learnFromEdits ? StatsStore.shared.recentCorrections(for: AppKind(bundle: targetAppBundle)) : []
         cleaning = true
         Task {
             // Applied after cleanup as well, since the model can still re-case or re-split a term.
             let text = dictionary.apply(await Cleanup.run(dictionary.apply(raw), appName: targetAppName, appBundle: targetAppBundle,
-                                                          vocabulary: dictionary.terms, settings: .shared))
+                                                          vocabulary: dictionary.terms, edits: edits, settings: .shared))
             await MainActor.run {
                 self.cleaning = false
                 if !text.isEmpty { self.paste(text, whole: true) }
@@ -203,10 +207,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastItem.title = "Last: " + String(text.prefix(50))
         let kind = AppKind(bundle: targetAppBundle)
         var out = whole && kind == .chat ? CursorContext.droppingChatPeriod(text) : text
+        let context = CursorContext.read()
         // Without a readable field, a trailing space keeps the next dictation from running into this one.
-        out = CursorContext.read()?.fit(out) ?? out + " "
+        out = context?.fit(out) ?? out + " "
         let rich = kind == .general || kind == .email ? RichText.flavors(for: out) : nil
         if TextInserter.insert(out, rich: rich) {
+            // A pasted list reads back without its "1." markers, which would look like edits.
+            if let context, rich == nil, StatsStore.shared.learnFromEdits {
+                EditLearner.shared.watch(context, pasted: out, bundle: targetAppBundle, whole: whole)
+            }
             if state == .needsAccessibility { setState(recording ? .recording : .transcribing) }
         } else {
             _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
