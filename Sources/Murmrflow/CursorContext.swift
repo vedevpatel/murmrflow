@@ -6,6 +6,9 @@ import NaturalLanguage
 struct CursorContext {
     let before: String
     let after: String
+    /// The field itself and where the selection started (UTF-16 offset), so it can be read again after pasting.
+    var element: AXUIElement? = nil
+    var location = 0
 
     /// Nil when the focused element exposes no text (or is a password field), or does not answer quickly.
     static func read() -> CursorContext? {
@@ -22,15 +25,21 @@ struct CursorContext {
         if let before = string(element, from: max(0, start - 200), to: start),
            let total: Int = attribute(element, kAXNumberOfCharactersAttribute),
            let after = string(element, from: end, to: min(total, end + 50)) {
-            return CursorContext(before: before, after: after)
+            return CursorContext(before: before, after: after, element: element, location: start)
         }
         // Some apps only expose the whole value, not ranges of it.
-        guard let value: String = attribute(element, kAXValueAttribute) else { return nil }
+        guard let value = value(of: element) else { return nil }
         let ns = value as NSString
         guard end <= ns.length else { return nil }
         let from = max(0, start - 200), to = min(ns.length, end + 50)
         return CursorContext(before: ns.substring(with: NSRange(location: from, length: start - from)),
-                             after: ns.substring(with: NSRange(location: end, length: to - end)))
+                             after: ns.substring(with: NSRange(location: end, length: to - end)),
+                             element: element, location: start)
+    }
+
+    /// The whole text of a field, or nil once it is gone or stops answering.
+    static func value(of element: AXUIElement) -> String? {
+        attribute(element, kAXValueAttribute)
     }
 
     private static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
@@ -75,7 +84,7 @@ struct CursorContext {
         let word = text[range].trimmingCharacters(in: .whitespaces)
         let rest = text[range.upperBound...]
         if word == "I" || rest.first?.isLetter == true || rest.first?.isNumber == true { return text }
-        if let words = wordList, words.range(of: Data("\n\(word.lowercased())\n".utf8)) == nil { return text }
+        if isCommonWord(word) == false { return text }
         let joined = before + text
         let tagger = NLTagger(tagSchemes: [.nameType])
         tagger.string = joined
@@ -83,6 +92,12 @@ struct CursorContext {
         let (tag, _) = tagger.tag(at: start, unit: .word, scheme: .nameType)
         if [.personalName, .placeName, .organizationName].contains(tag) { return text }
         return text.replacingCharacters(in: range, with: text[range].lowercased())
+    }
+
+    /// Whether the word is an ordinary lowercase English word rather than a name or made-up term;
+    /// nil when the system word list is missing.
+    static func isCommonWord(_ word: String) -> Bool? {
+        wordList.map { $0.range(of: Data("\n\(word.lowercased())\n".utf8)) != nil }
     }
 
     /// One word per line; ordinary words are lowercase and proper nouns capitalized.
