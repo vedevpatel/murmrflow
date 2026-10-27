@@ -5,6 +5,8 @@ import ApplicationServices
 final class HotkeyMonitor {
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
+    /// Any key typed by the user, without saying which; Murmrflow's own simulated paste is left out.
+    var onKeyDown: (() -> Void)?
 
     private static let rightOptionKeyCode: Int64 = 61
     private var tap: CFMachPort?
@@ -20,7 +22,7 @@ final class HotkeyMonitor {
             CGRequestListenEventAccess()
             return false
         }
-        let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+        let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue | 1 << CGEventType.keyDown.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(refcon!).takeUnretainedValue()
             monitor.handle(type: type, event: event)
@@ -42,6 +44,11 @@ final class HotkeyMonitor {
     private func handle(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return
+        }
+        if type == .keyDown {
+            // The tap runs on the main run loop, so this is already the main thread.
+            if event.getIntegerValueField(.eventSourceUnixProcessID) != Int64(getpid()) { onKeyDown?() }
             return
         }
         guard type == .flagsChanged,
