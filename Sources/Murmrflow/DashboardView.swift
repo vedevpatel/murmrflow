@@ -310,6 +310,9 @@ private struct DictionaryView: View {
                                 if !entry.heardAs.isEmpty {
                                     Text("heard as " + entry.heardAs.joined(separator: ", ")).font(.callout).foregroundStyle(.secondary)
                                 }
+                                if entry.learned == true {
+                                    Text("learned from your edits").font(.caption).foregroundStyle(Theme.accent)
+                                }
                                 Spacer(minLength: 0)
                                 Button { dictionary.remove(entry) } label: { Image(systemName: "trash") }
                                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove")
@@ -350,6 +353,15 @@ private struct SettingsView: View {
                     Text("If this model is rate-limited, Murmrflow switches to \(CleanupSettings.fallbackModels.filter { $0 != cleanup.model }.joined(separator: ", then ")).")
                         .font(.caption).foregroundStyle(.secondary)
                     Link("Get a key at console.groq.com", destination: URL(string: "https://console.groq.com/keys")!).font(.callout)
+                }
+                .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Learn from my edits", isOn: $store.learnFromEdits).font(.headline)
+                    Text("For two minutes after a paste, Murmrflow rereads the text it pasted to see what you fixed. A misheard name or term you correct is added to your Dictionary; small spelling, punctuation and wording fixes are saved on this Mac as short snippets and shown to the cleanup model next time. Only changes made while you were typing in that app count, so edits by collaborators or the app itself are skipped; which keys you press is never recorded. Rewrites, new text you type and pasted lists are ignored.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
                 .padding(18).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
