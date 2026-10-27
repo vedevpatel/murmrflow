@@ -21,13 +21,19 @@ final class StatsStore: ObservableObject {
     @Published var saveText: Bool {
         didSet { UserDefaults.standard.set(saveText, forKey: Self.saveTextKey) }
     }
+    /// Whether fixes made by hand after a paste are learned from; see EditLearner.
+    @Published var learnFromEdits: Bool {
+        didSet { UserDefaults.standard.set(learnFromEdits, forKey: Self.learnKey) }
+    }
 
     private static let saveTextKey = "saveTranscriptText"
+    private static let learnKey = "learnFromEdits"
     let directory: URL
     private let db: Database?
 
     private init() {
         saveText = UserDefaults.standard.bool(forKey: Self.saveTextKey)
+        learnFromEdits = UserDefaults.standard.object(forKey: Self.learnKey) as? Bool ?? true
         directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Murmrflow", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -56,6 +62,21 @@ final class StatsStore: ObservableObject {
         if db.userVersion < 2 {
             try? db.run("ALTER TABLE dictations ADD COLUMN raw_text TEXT")
             db.userVersion = 2
+        }
+        if db.userVersion < 3 {
+            // The text as the user left it after fixing it by hand, next to what was pasted.
+            try? db.run("ALTER TABLE dictations ADD COLUMN edited_text TEXT")
+            // Small fixes learned from those edits, shown to the cleanup model as examples.
+            try? db.run("""
+                CREATE TABLE IF NOT EXISTS corrections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at REAL NOT NULL,
+                    app_bundle TEXT,
+                    before_text TEXT NOT NULL,
+                    after_text TEXT NOT NULL
+                )
+                """)
+            db.userVersion = 3
         }
         importLegacyLog()
     }
@@ -96,8 +117,32 @@ final class StatsStore: ObservableObject {
         reload()
     }
 
+    /// Keeps the user's edited version of the latest dictation, when transcripts are being saved.
+    func markLastEdited(_ text: String) {
+        guard saveText else { return }
+        try? db?.run("UPDATE dictations SET edited_text = ? WHERE id = (SELECT MAX(id) FROM dictations)", [text])
+    }
+
+    func addCorrection(before: String, after: String, bundle: String?) {
+        guard let db else { return }
+        // A fix made again moves to the front instead of being stored twice.
+        try? db.run("DELETE FROM corrections WHERE before_text = ? AND after_text = ?", [before, after])
+        try? db.run("INSERT INTO corrections (created_at, app_bundle, before_text, after_text) VALUES (?, ?, ?, ?)",
+                    [Date().timeIntervalSince1970, bundle, before, after])
+    }
+
+    /// The latest learned fixes, those made in the same kind of app first.
+    func recentCorrections(for kind: AppKind, limit: Int = 6) -> [(before: String, after: String)] {
+        let rows = (try? db?.query("SELECT before_text, after_text, app_bundle FROM corrections ORDER BY created_at DESC LIMIT 50") { s in
+            (before: Database.text(s, 0) ?? "", after: Database.text(s, 1) ?? "", kind: AppKind(bundle: Database.text(s, 2)))
+        }) ?? []
+        let sameKind = rows.filter { $0.kind == kind }, others = rows.filter { $0.kind != kind }
+        return (sameKind + others).prefix(limit).map { ($0.before, $0.after) }
+    }
+
     func deleteAll() {
         try? db?.run("DELETE FROM dictations")
+        try? db?.run("DELETE FROM corrections")
         reload()
     }
 }
