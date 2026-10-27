@@ -7,6 +7,8 @@ struct DictionaryEntry: Codable, Identifiable, Equatable {
     var term: String
     /// What the transcript tends to say instead, e.g. "murmur flow".
     var heardAs: [String] = []
+    /// Added by learning from the user's edits rather than typed in; optional so older saved entries still decode.
+    var learned: Bool? = nil
 }
 
 /// Names and terms spelled the speaker's way in every dictation: fixed in the transcript directly,
@@ -40,6 +42,20 @@ final class PersonalDictionary: ObservableObject {
             .filter { !$0.isEmpty && $0.caseInsensitiveCompare(term) != .orderedSame }
         var list = entries.filter { $0.term.caseInsensitiveCompare(term) != .orderedSame }
         list.append(DictionaryEntry(term: term, heardAs: variants))
+        entries = list.sorted { $0.term.localizedCaseInsensitiveCompare($1.term) == .orderedAscending }
+    }
+
+    /// Records a fix the user made by hand. The misheard form becomes a replacement unless it is a single ordinary
+    /// word, which would then be rewritten everywhere; phrases like "murmur flow" are safe to replace.
+    func learn(term: String, heardAs: String) {
+        let ordinary = !heardAs.contains(" ") && CursorContext.isCommonWord(heardAs) != false
+        let variant = ordinary || heardAs.caseInsensitiveCompare(term) == .orderedSame ? nil : heardAs
+        if let i = entries.firstIndex(where: { $0.term.caseInsensitiveCompare(term) == .orderedSame }) {
+            guard let variant, !entries[i].heardAs.contains(where: { $0.caseInsensitiveCompare(variant) == .orderedSame }) else { return }
+            entries[i].heardAs.append(variant)
+            return
+        }
+        let list = entries + [DictionaryEntry(term: term, heardAs: variant.map { [$0] } ?? [], learned: true)]
         entries = list.sorted { $0.term.localizedCaseInsensitiveCompare($1.term) == .orderedAscending }
     }
 
