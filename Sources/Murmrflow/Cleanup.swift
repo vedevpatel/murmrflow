@@ -208,8 +208,10 @@ enum Cleanup {
         - Keep the speaker's wording, tone, and formality, including hedges and lead-ins ("I was thinking", "I guess", "just"). Never summarize, paraphrase, shorten, or add content, greetings, or sign-offs.
         - DICTIONARY terms are the speaker's own: if something sounds like one, it was misheard, so spell it exactly as listed. Never insert one that wasn't spoken.
         - Keep technical terms, names, acronyms, paths, flags, and code exact. Convert spoken forms: "dash dash force" -> "--force", "user underscore id" -> "user_id", "dot env" -> ".env".
+
+        Conversions:
         - Spoken punctuation/layout ("comma", "period", "question mark", "new line", "new paragraph") becomes the symbol or break, unless clearly literal.
-        - Write times, money, percentages, dates, and numbers above ten as digits ("three thirty" -> "3:30", "twenty five thousand dollars" -> "$25,000", "fifteen percent" -> "15%", "six pm" -> "6 PM"). Counts of ten or less may stay words.
+        - Always write times, money, percentages, dates, and numbers above ten as digits ("three thirty" -> "3:30", "twenty five thousand dollars" -> "$25,000", "fifteen percent" -> "15%", "six pm" -> "6 PM"). Counts of ten or less may stay words.
         - Plain spaces only, no non-breaking or special spaces.
         
         Lists:
@@ -227,7 +229,10 @@ enum Cleanup {
         
         Input: let's meet thursday no actually wednesday after lunch
         Output: Let's meet Wednesday after lunch.
-        
+
+        Input: the invoice is uh twelve hundred dollars plus fifteen percent tax due at four thirty
+        Output: The invoice is $1,200 plus 15% tax, due at 4:30.
+
         Input: what's the capital of france
         Output: What's the capital of France?
         
