@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastTapEnd = Date.distantPast
     private var lastSpeech = Date()
     private var silenceTimer: Timer?
+    /// Drops other voices in the room during hands-free; nil while dictating with the key held.
+    private var gate: PhraseGate?
     private static let doubleTapGap: TimeInterval = 0.4
     private static let handsFreeSilence: TimeInterval = 60
 
@@ -81,13 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             silenceTimer?.invalidate()
         }
         let doubleTap = Date().timeIntervalSince(lastTapEnd) < Self.doubleTapGap
-        beginRecording(command: shift)
+        beginRecording(command: shift, handsFree: doubleTap)
         if doubleTap && recording { startHandsFree() }
     }
 
     private func startHandsFree() {
         handsFree = true
         lastSpeech = Date()
+        gate = PhraseGate(learned: VoiceLevel.learnedPhraseLevel(mic: recorder.level.mic))
         overlay.title = commandMode ? "Command · Hands-free" : "Hands-free"
         overlay.update("")
         stateItem.title = "Hands-free — tap Right Option to stop"
@@ -106,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         finishRecording()
     }
 
-    private func beginRecording(command: Bool) {
+    private func beginRecording(command: Bool, handsFree startsHandsFree: Bool = false) {
         guard !recording, !cleaning else { return }
         // Command Mode always goes through Groq; without a key there is nothing it can do.
         if command && !CleanupSettings.shared.hasKey { NSSound.beep(); return }
@@ -121,19 +124,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         targetAppName = target?.localizedName
         targetAppBundle = target?.bundleIdentifier
         commandMode = command
+        gate = nil
         overlay.title = command ? "Command" : nil
         selectionTask = command ? captureSelection() : nil
         let stream = StreamingSession(port: port)
-        // The server only sends partials and finals while someone is talking, which is what hands-free times out on.
-        stream.onPartial = { [weak self] in self?.lastSpeech = Date(); self?.overlay.update($0) }
-        stream.onFinal = { [weak self] in self?.lastSpeech = Date(); self?.commit($0) }
+        stream.onPartial = { [weak self] in self?.showPartial($0) }
+        stream.onFinal = { [weak self] in self?.commit($0) }
         stream.onDone = { [weak self] in self?.streamDone($0) }
         stream.onError = { [weak self] in self?.streamError($0) }
         session = stream
         recorder.onChunk = { [weak stream] in stream?.send($0) }
         stream.start()
         do {
-            try recorder.start()
+            try recorder.start(handsFree: startsHandsFree)
             recording = true
             recordStart = Date()
             overlay.update("")
@@ -197,10 +200,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A finished phrase: paste it into the focused app, or hold it for cleanup.
-    private func commit(_ phrase: String) {
+    /// Live captions, except in hands-free for speech too quiet to be the speaker's (a TV, someone nearby).
+    private func showPartial(_ text: String) {
+        if let gate, !gate.wouldAccept(recorder.level.phraseLevelSoFar) { return }
+        overlay.update(text)
+    }
+
+    /// Where a finished phrase's text came from, which decides how hands-free's gate measures it.
+    private enum PhraseSource {
+        /// A phrase the server finished while recording went on.
+        case live
+        /// What the server finished when the recording ended.
+        case end
+        /// The whole recording re-transcribed after the stream broke: not judged, since its phrases can't be told apart.
+        case rerun
+    }
+
+    /// A finished phrase: paste it into the focused app, or hold it for cleanup. In hands-free, it must first pass
+    /// the gate against other voices.
+    private func commit(_ phrase: String, from source: PhraseSource = .live) {
         let text = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if source != .rerun, var gate {
+            let level = source == .live ? recorder.level.takePhraseLevel() : recorder.level.takeRemainingLevel()
+            let accepted = gate.accept(level)
+            self.gate = gate
+            guard accepted else {
+                NSLog("hands-free: dropped a phrase too quiet to be the speaker (level \(level))")
+                overlay.update("")
+                return
+            }
+            // Only the speaker's own phrases keep hands-free going.
+            lastSpeech = Date()
+        }
         finalsText += (finalsText.isEmpty ? "" : " ") + text
         overlay.update("")
         // Basic mode: tidied by rules and pasted phrase by phrase while the speaker keeps talking.
@@ -275,9 +307,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let full = full.trimmingCharacters(in: .whitespacesAndNewlines)
         if full.hasPrefix(finalsText) {
             let rest = full.dropFirst(finalsText.count).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !rest.isEmpty { commit(String(rest)) }
+            if !rest.isEmpty { commit(String(rest), from: .end) }
         } else if finalsText.isEmpty {
-            commit(full)
+            commit(full, from: .end)
         }
         finishDictation()
     }
@@ -303,7 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let text = try await client.transcribe(wav: wav, hotwords: PersonalDictionary.shared.terms)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
-                    if !text.isEmpty { self.commit(text) }
+                    if !text.isEmpty { self.commit(text, from: .rerun) }
                     self.finishDictation()
                 }
             } catch {
@@ -316,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recordDictation() {
         guard !dictationRecorded else { return }
         dictationRecorded = true
+        if !finalsText.isEmpty { recorder.level.finish() }
         StatsStore.shared.record(text: lastText, raw: finalsText, seconds: dictationSeconds, appName: targetAppName, appBundle: targetAppBundle)
     }
 
