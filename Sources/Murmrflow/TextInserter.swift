@@ -17,27 +17,55 @@ enum TextInserter {
             return false
         }
         restore?.cancel()
-        let saved: Saved = savedClipboard ?? (pb.pasteboardItems ?? []).map { item in
-            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
-        }
+        let saved = savedClipboard ?? snapshot(pb)
         savedClipboard = saved
 
         write(text, rich: rich, to: pb)
-        pressCommandV()
+        press(key: 9)  // V
 
         // Give the target app time to read the pasteboard before putting the old contents back.
         let work = DispatchWorkItem {
-            pb.clearContents()
-            for entry in saved {
-                let item = NSPasteboardItem()
-                for (type, data) in entry { item.setData(data, forType: type) }
-                pb.writeObjects([item])
-            }
+            put(saved, on: pb)
             savedClipboard = nil
         }
         restore = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
         return true
+    }
+
+    /// The frontmost app's selection, copied with ⌘C, with the clipboard put back afterwards. For apps that do
+    /// not expose their selection through Accessibility. Nil when nothing was copied.
+    @MainActor
+    static func copySelection() async -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        let pb = NSPasteboard.general
+        // A paste still waiting to restore the clipboard would otherwise be saved as the user's contents.
+        if let pending = restore, !pending.isCancelled, savedClipboard != nil {
+            pending.perform()
+            pending.cancel()
+        }
+        let saved = snapshot(pb)
+        let count = pb.changeCount
+        press(key: 8)  // C
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        let copied = pb.changeCount != count ? pb.string(forType: .string) : nil
+        put(saved, on: pb)
+        return copied?.isEmpty == false ? copied : nil
+    }
+
+    private static func snapshot(_ pb: NSPasteboard) -> Saved {
+        (pb.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        }
+    }
+
+    private static func put(_ saved: Saved, on pb: NSPasteboard) {
+        pb.clearContents()
+        for entry in saved {
+            let item = NSPasteboardItem()
+            for (type, data) in entry { item.setData(data, forType: type) }
+            pb.writeObjects([item])
+        }
     }
 
     private static func write(_ text: String, rich: (html: String, rtf: Data)?, to pb: NSPasteboard) {
@@ -51,11 +79,11 @@ enum TextInserter {
         pb.writeObjects([item])
     }
 
-    private static func pressCommandV() {
+    /// ⌘ plus the key. Only Command is set on the event, even while the user holds the dictation hotkey.
+    private static func press(key: CGKeyCode) {
         let src = CGEventSource(stateID: .combinedSessionState)
-        let vKey: CGKeyCode = 9
         for down in [true, false] {
-            let e = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: down)
+            let e = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: down)
             e?.flags = .maskCommand
             e?.post(tap: .cghidEventTap)
         }
