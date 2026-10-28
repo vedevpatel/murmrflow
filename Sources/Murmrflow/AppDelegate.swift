@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// With cleanup on, phrases are held back and pasted once the whole dictation has been rewritten.
     private var buffering = false
     private var cleaning = false
+    /// Command Mode: the speech is an instruction for the selected text, see CommandMode.
+    private var commandMode = false
+    private var selectionTask: Task<String?, Never>?
 
     private enum State { case loading, ready, recording, transcribing, needsPermission, needsAccessibility, error }
 
@@ -43,7 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
 
-        hotkey.onPress = { [weak self] in self?.beginRecording() }
+        hotkey.onPress = { [weak self] shift in self?.beginRecording(command: shift) }
+        hotkey.onShift = { [weak self] in self?.switchToCommand() }
         hotkey.onRelease = { [weak self] in self?.finishRecording() }
         hotkey.onKeyDown = { EditLearner.shared.noteKeyDown() }
         waitForHotkeyPermission()
@@ -59,11 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Dictation flow
 
-    private func beginRecording() {
+    private func beginRecording(command: Bool) {
         guard !recording, !cleaning else { return }
+        // Command Mode always goes through Groq; without a key there is nothing it can do.
+        if command && !CleanupSettings.shared.hasKey { NSSound.beep(); return }
         // Fixes made to the last dictation must be learned before this one is cleaned up.
         EditLearner.shared.finish()
-        buffering = CleanupSettings.shared.isActive
+        buffering = command || CleanupSettings.shared.isActive
         finalsText = ""
         lastText = ""
         streamFailed = false
@@ -71,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = NSWorkspace.shared.frontmostApplication
         targetAppName = target?.localizedName
         targetAppBundle = target?.bundleIdentifier
+        commandMode = command
+        overlay.title = command ? "Command" : nil
+        selectionTask = command ? captureSelection() : nil
         let stream = StreamingSession(port: port)
         stream.onPartial = { [weak self] in self?.overlay.update($0) }
         stream.onFinal = { [weak self] in self?.commit($0) }
@@ -90,6 +99,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stream.cancel()
             session = nil
             setState(.error)
+        }
+    }
+
+    /// Shift pressed after the hotkey: still Command Mode, as long as nothing has been pasted yet.
+    private func switchToCommand() {
+        guard recording, !commandMode, lastText.isEmpty, CleanupSettings.shared.hasKey else { return }
+        commandMode = true
+        buffering = true
+        overlay.title = "Command"
+        overlay.update("")
+        selectionTask = captureSelection()
+    }
+
+    /// The selected text, read through Accessibility or, where the app doesn't expose it, copied with ⌘C.
+    /// Code editors are only asked through Accessibility: with nothing selected their ⌘C copies the whole line.
+    private func captureSelection() -> Task<String?, Never> {
+        let kind = AppKind(bundle: targetAppBundle)
+        return Task { @MainActor in
+            switch CursorContext.selection() {
+            case .text(let text): return text
+            case .none: return nil
+            case .unknown: return kind == .code ? nil : await TextInserter.copySelection()
+            }
         }
     }
 
@@ -134,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The transcript is complete: rewrite and paste it if it was held back, then record the dictation.
     private func finishDictation() {
+        if commandMode { return runCommand() }
         overlay.hide()
         guard buffering, !finalsText.isEmpty else {
             recordDictation()
@@ -151,6 +184,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 self.cleaning = false
                 if !text.isEmpty { self.paste(text, whole: true) }
+                self.recordDictation()
+                if self.state != .needsAccessibility { self.setState(.ready) }
+            }
+        }
+    }
+
+    /// Command Mode: the transcript is an instruction, applied to the selection or used to write new text.
+    /// History keeps the spoken instruction, not the result.
+    private func runCommand() {
+        let instruction = finalsText, selection = selectionTask
+        let appName = targetAppName, appBundle = targetAppBundle
+        selectionTask = nil
+        lastText = instruction
+        guard !instruction.isEmpty else {
+            overlay.hide()
+            recordDictation()
+            if state != .needsAccessibility { setState(.ready) }
+            return
+        }
+        overlay.update("Working on it…")
+        cleaning = true
+        Task {
+            let selected = await selection?.value
+            let result = await CommandMode.run(instruction: instruction, selection: selected, appName: appName,
+                                               appBundle: appBundle, settings: .shared)
+            await MainActor.run {
+                self.cleaning = false
+                self.overlay.hide()
+                if let result, !result.isEmpty {
+                    self.pasteCommandResult(result, replacing: selected != nil)
+                } else {
+                    NSSound.beep()
+                }
                 self.recordDictation()
                 if self.state != .needsAccessibility { self.setState(.ready) }
             }
@@ -217,16 +283,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Without a readable field, a trailing space keeps the next dictation from running into this one.
         out = context?.fit(out) ?? out + " "
         let rich = kind == .general || kind == .email ? RichText.flavors(for: out) : nil
-        if TextInserter.insert(out, rich: rich) {
-            // A pasted list reads back without its "1." markers, which would look like edits.
-            if let context, rich == nil, StatsStore.shared.learnFromEdits {
-                EditLearner.shared.watch(context, pasted: out, bundle: targetAppBundle, whole: whole)
-            }
-            if state == .needsAccessibility { setState(recording ? .recording : .transcribing) }
-        } else {
-            _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
-            setState(.needsAccessibility)
+        // A pasted list reads back without its "1." markers, which would look like edits.
+        if insert(out, rich: rich), let context, rich == nil, StatsStore.shared.learnFromEdits {
+            EditLearner.shared.watch(context, pasted: out, bundle: targetAppBundle, whole: whole)
         }
+    }
+
+    /// Command Mode's result replaces the selection exactly as written; with nothing selected it is fitted in
+    /// at the cursor like a dictation. It is not watched for edits: it is the model's writing, not the user's.
+    private func pasteCommandResult(_ text: String, replacing: Bool) {
+        lastItem.title = "Last command: " + String(lastText.prefix(40))
+        let kind = AppKind(bundle: targetAppBundle)
+        let out = replacing ? text : (CursorContext.read()?.fit(text) ?? text + " ")
+        insert(out, rich: kind == .general || kind == .email ? RichText.flavors(for: out) : nil)
+    }
+
+    /// Pastes into the focused app, or leaves the text on the clipboard and asks for Accessibility.
+    @discardableResult
+    private func insert(_ text: String, rich: (html: String, rtf: Data)?) -> Bool {
+        if TextInserter.insert(text, rich: rich) {
+            if state == .needsAccessibility { setState(recording ? .recording : .transcribing) }
+            return true
+        }
+        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
+        setState(.needsAccessibility)
+        return false
     }
 
     // MARK: - Permissions
@@ -286,7 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.state = state
         let (symbol, text): (String, String) = switch state {
         case .loading: ("hourglass", "Loading model…")
-        case .ready: ("mic", "Ready — hold Right Option to dictate")
+        case .ready: ("mic", "Ready — hold Right Option to dictate, with Shift for Command Mode")
         case .recording: ("mic.fill", "Listening…")
         case .transcribing: ("waveform", "Transcribing…")
         case .needsPermission: ("exclamationmark.triangle", "Enable Murmrflow under Input Monitoring & Accessibility in System Settings")
