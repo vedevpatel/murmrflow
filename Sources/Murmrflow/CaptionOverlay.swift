@@ -6,6 +6,8 @@ final class CaptionOverlay {
     private let label = NSTextField(wrappingLabelWithString: "")
     private let width: CGFloat = 560
     private let inset: CGFloat = 14
+    /// Shown in front of the caption, e.g. "Command" while an instruction is being spoken.
+    var title: String?
 
     init() {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 60),
@@ -35,7 +37,8 @@ final class CaptionOverlay {
     }
 
     func update(_ text: String) {
-        label.stringValue = text.isEmpty ? "Listening…" : text
+        let caption = text.isEmpty ? "Listening…" : text
+        label.stringValue = title.map { "\($0) · \(caption)" } ?? caption
         let size = label.sizeThatFits(NSSize(width: width - inset * 2, height: .greatestFiniteMagnitude))
         let height = size.height + inset * 2
         label.frame = NSRect(x: inset, y: inset, width: width - inset * 2, height: size.height)
