@@ -9,6 +9,7 @@ final class CleanupSettings: ObservableObject {
     static let fallbackModels = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"]
     static let defaultModel = fallbackModels[0]
 
+    /// The dictation mode: true for AI cleanup, false for Basic (rules on this Mac, pasted as you talk).
     @Published var enabled: Bool {
         didSet { UserDefaults.standard.set(enabled, forKey: "cleanupEnabled") }
     }
@@ -19,8 +20,9 @@ final class CleanupSettings: ObservableObject {
         didSet { Keychain.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), account: "groq") }
     }
 
+    var hasKey: Bool { !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// Cleanup only runs when it is switched on and there is a key to use.
-    var isActive: Bool { enabled && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var isActive: Bool { enabled && hasKey }
 
     private init() {
         enabled = UserDefaults.standard.bool(forKey: "cleanupEnabled")
@@ -100,7 +102,7 @@ enum Cleanup {
     }
     private static let cooldowns = Cooldowns()
 
-    /// Returns the cleaned text, or the transcript with only filler words removed if no model could clean it in time.
+    /// Returns the cleaned text, or the transcript tidied by Basic mode's rules if no model could clean it in time.
     /// `vocabulary` is the personal dictionary: spellings the model should prefer for words it hears near them.
     /// `edits` are fixes the user made by hand to earlier output, as before/after snippets.
     static func run(_ transcript: String, appName: String?, appBundle: String?, vocabulary: [String],
@@ -131,7 +133,7 @@ enum Cleanup {
                 NSLog("cleanup failed on \(model): \(error)")
             }
         }
-        return removeFillers(transcript)
+        return BasicCleanup.apply(transcript)
     }
 
     private static func groq(_ transcript: String, appName: String?, appBundle: String?, vocabulary: [String],
@@ -267,12 +269,5 @@ enum Cleanup {
         let rawWords = raw.split(whereSeparator: \.isWhitespace).count
         let cleanedWords = cleaned.split(whereSeparator: \.isWhitespace).count
         return cleanedWords > rawWords * 2 + 10
-    }
-
-    private static func removeFillers(_ text: String) -> String {
-        let fillers = #"(?i)\b(?:um+|uh+|erm+|uhm+|hmm+)\b[,.]?\s*"#
-        return text.replacingOccurrences(of: fillers, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
