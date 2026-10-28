@@ -90,6 +90,13 @@ struct DashboardView: View {
         .onAppear { store.reload() }
     }
 
+    /// What the selected mode does with a dictation, and where it goes.
+    private var modeCaption: Label<Text, Image> {
+        if !cleanup.enabled { return Label("Rules on this Mac, pasted as you talk", systemImage: "lock.fill") }
+        if !cleanup.hasKey { return Label("Add a Groq key in Settings to use AI cleanup", systemImage: "exclamationmark.triangle") }
+        return Label("Rewritten by Groq after you stop talking", systemImage: "cloud")
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
@@ -111,9 +118,16 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Label(cleanup.isActive ? "Transcribed on this Mac, cleaned up by Groq" : "Runs entirely on this Mac",
-                  systemImage: cleanup.isActive ? "cloud" : "lock.fill")
-                .font(.caption).foregroundStyle(.secondary).padding(12)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Mode").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Picker("Mode", selection: $cleanup.enabled) {
+                    Text("Basic").tag(false)
+                    Text("AI cleanup").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                modeCaption.font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
         }
         .padding(.horizontal, 10)
         .frame(width: 210)
@@ -340,8 +354,8 @@ private struct SettingsView: View {
                 Text("Settings").font(.system(size: 30, weight: .semibold))
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Clean up dictations with AI", isOn: $cleanup.enabled).font(.headline)
-                    Text("Removes filler words and false starts, applies self-corrections like \"Thursday, no, Wednesday\", fixes punctuation and formats lists, then pastes the result once you stop talking. The transcript and the name of the app you're typing into are sent to Groq; audio never leaves this Mac. If Groq is slow or unreachable, the raw transcript is pasted.")
+                    Text("AI cleanup").font(.headline)
+                    Text("Switch between Basic and AI cleanup in the sidebar or from the menu bar. In AI cleanup mode, Murmrflow removes filler words and false starts, applies self-corrections like \"Thursday, no, Wednesday\", fixes punctuation and formats lists, then pastes the result once you stop talking. The transcript and the name of the app you're typing into are sent to Groq; audio never leaves this Mac. If Groq is slow or unreachable, the transcript is tidied by the Basic rules instead.")
                         .font(.callout).foregroundStyle(.secondary)
                     SecureField("Groq API key", text: $cleanup.apiKey).textFieldStyle(.roundedBorder).frame(maxWidth: 420)
                     HStack(spacing: 8) {
