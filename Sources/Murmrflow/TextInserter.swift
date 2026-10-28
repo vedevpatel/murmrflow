@@ -37,6 +37,20 @@ enum TextInserter {
     /// not expose their selection through Accessibility. Nil when nothing was copied.
     @MainActor
     static func copySelection() async -> String? {
+        // A second request (the second tap of a double-tap) shares the copy in progress: two overlapping
+        // copies would each save the other's result as the user's clipboard.
+        if let copying { return await copying.value }
+        let task = Task { @MainActor in await copyNow() }
+        copying = task
+        let copied = await task.value
+        copying = nil
+        return copied
+    }
+
+    @MainActor private static var copying: Task<String?, Never>?
+
+    @MainActor
+    private static func copyNow() async -> String? {
         guard AXIsProcessTrusted() else { return nil }
         let pb = NSPasteboard.general
         // A paste still waiting to restore the clipboard would otherwise be saved as the user's contents.
