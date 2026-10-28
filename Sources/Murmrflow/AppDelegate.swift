@@ -35,6 +35,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Command Mode: the speech is an instruction for the selected text, see CommandMode.
     private var commandMode = false
     private var selectionTask: Task<String?, Never>?
+    /// Hands-free: started by double-tapping the hotkey, it records until the hotkey is tapped again
+    /// or nothing has been said for `handsFreeSilence`.
+    private var handsFree = false
+    private var lastTapEnd = Date.distantPast
+    private var lastSpeech = Date()
+    private var silenceTimer: Timer?
+    private static let doubleTapGap: TimeInterval = 0.4
+    private static let handsFreeSilence: TimeInterval = 60
 
     private enum State { case loading, ready, recording, transcribing, needsPermission, needsAccessibility, error }
 
@@ -46,9 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary)
 
-        hotkey.onPress = { [weak self] shift in self?.beginRecording(command: shift) }
+        hotkey.onPress = { [weak self] shift in self?.hotkeyPressed(shift: shift) }
         hotkey.onShift = { [weak self] in self?.switchToCommand() }
-        hotkey.onRelease = { [weak self] in self?.finishRecording() }
+        // Letting go ends a held dictation; a hands-free one keeps going until the next tap.
+        hotkey.onRelease = { [weak self] in if self?.handsFree == false { self?.finishRecording() } }
         hotkey.onKeyDown = { EditLearner.shared.noteKeyDown() }
         waitForHotkeyPermission()
 
@@ -62,6 +71,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { server.stop() }
 
     // MARK: - Dictation flow
+
+    /// A press right after a quick tap is a double-tap, which starts hands-free; a press during hands-free stops it.
+    private func hotkeyPressed(shift: Bool) {
+        if handsFree {
+            if recording { return stopHandsFree() }
+            // Hands-free with nothing recording should not happen; recover rather than ignore every release.
+            handsFree = false
+            silenceTimer?.invalidate()
+        }
+        let doubleTap = Date().timeIntervalSince(lastTapEnd) < Self.doubleTapGap
+        beginRecording(command: shift)
+        if doubleTap && recording { startHandsFree() }
+    }
+
+    private func startHandsFree() {
+        handsFree = true
+        lastSpeech = Date()
+        overlay.title = commandMode ? "Command · Hands-free" : "Hands-free"
+        overlay.update("")
+        stateItem.title = "Hands-free — tap Right Option to stop"
+        // A safety net for a session left running by mistake; pauses to think are much shorter than this.
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, Date().timeIntervalSince(self.lastSpeech) > Self.handsFreeSilence else { return }
+            NSLog("hands-free stopped after \(Int(Self.handsFreeSilence))s without speech")
+            self.stopHandsFree()
+        }
+    }
+
+    private func stopHandsFree() {
+        handsFree = false
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+        finishRecording()
+    }
 
     private func beginRecording(command: Bool) {
         guard !recording, !cleaning else { return }
@@ -81,8 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.title = command ? "Command" : nil
         selectionTask = command ? captureSelection() : nil
         let stream = StreamingSession(port: port)
-        stream.onPartial = { [weak self] in self?.overlay.update($0) }
-        stream.onFinal = { [weak self] in self?.commit($0) }
+        // The server only sends partials and finals while someone is talking, which is what hands-free times out on.
+        stream.onPartial = { [weak self] in self?.lastSpeech = Date(); self?.overlay.update($0) }
+        stream.onFinal = { [weak self] in self?.lastSpeech = Date(); self?.commit($0) }
         stream.onDone = { [weak self] in self?.streamDone($0) }
         stream.onError = { [weak self] in self?.streamError($0) }
         session = stream
@@ -131,6 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let samples = recorder.stop()
         let seconds = Date().timeIntervalSince(recordStart)
         guard seconds > 0.3, !samples.isEmpty else {
+            // Too short to be speech: a tap, and maybe the first half of a double-tap.
+            lastTapEnd = Date()
             session?.cancel(); session = nil
             overlay.hide(); setState(.ready)
             return
@@ -367,7 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.state = state
         let (symbol, text): (String, String) = switch state {
         case .loading: ("hourglass", "Loading model…")
-        case .ready: ("mic", "Ready — hold Right Option to dictate, with Shift for Command Mode")
+        case .ready: ("mic", "Ready — hold Right Option to dictate (double-tap for hands-free, add Shift for Command Mode)")
         case .recording: ("mic.fill", "Listening…")
         case .transcribing: ("waveform", "Transcribing…")
         case .needsPermission: ("exclamationmark.triangle", "Enable Murmrflow under Input Monitoring & Accessibility in System Settings")
