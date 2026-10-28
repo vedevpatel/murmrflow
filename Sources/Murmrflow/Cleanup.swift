@@ -89,7 +89,7 @@ enum AppKind {
 /// Turns a raw transcript into the text the speaker meant to write: fillers, false starts and
 /// self-corrections removed, punctuation and formatting fixed, tone adjusted to the target app.
 enum Cleanup {
-    /// Never paste later than this; past it the raw transcript is used instead.
+    /// Never paste later than this; past it the transcript is tidied by Basic mode's rules instead.
     private static let timeout: TimeInterval = 4
 
     private struct RateLimited: Error { let retryAfter: TimeInterval }
@@ -107,6 +107,22 @@ enum Cleanup {
     /// `edits` are fixes the user made by hand to earlier output, as before/after snippets.
     static func run(_ transcript: String, appName: String?, appBundle: String?, vocabulary: [String],
                     edits: [(before: String, after: String)], settings: CleanupSettings) async -> String {
+        let user = userMessage(transcript, appName: appName, appBundle: appBundle, vocabulary: vocabulary, edits: edits)
+        let cleaned = await complete(system: systemPrompt, user: user, timeout: timeout, settings: settings) { model, cleaned in
+            guard cleaned == "EMPTY" || !looksLikeAnAnswer(raw: transcript, cleaned: cleaned) else {
+                NSLog("cleanup output from \(model) looked like a reply, trying the next model")
+                return false
+            }
+            return true
+        }
+        guard let cleaned else { return BasicCleanup.apply(transcript) }
+        return cleaned == "EMPTY" ? "" : cleaned
+    }
+
+    /// Asks the chosen model, then each fallback, until one gives an answer `accept`s within `timeout`.
+    /// Rate-limited models are skipped until Groq says they may be tried again. Nil when none answered in time.
+    static func complete(system: String, user: String, timeout: TimeInterval, settings: CleanupSettings,
+                         accept: (_ model: String, _ answer: String) -> Bool = { _, _ in true }) async -> String? {
         let deadline = Date().addingTimeInterval(timeout)
         let apiKey = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let chosen = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -118,35 +134,27 @@ enum Cleanup {
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0.25 else { break }
             do {
-                let cleaned = try await groq(transcript, appName: appName, appBundle: appBundle, vocabulary: vocabulary,
-                                             edits: edits, apiKey: apiKey, model: model, timeout: remaining)
-                if cleaned == "EMPTY" { return "" }
-                if looksLikeAnAnswer(raw: transcript, cleaned: cleaned) {
-                    NSLog("cleanup output from \(model) looked like a reply, trying the next model")
-                    continue
-                }
-                return cleaned
+                let answer = try await groq(system: system, user: user, apiKey: apiKey, model: model, timeout: remaining)
+                if accept(model, answer) { return answer }
             } catch let limit as RateLimited {
-                NSLog("cleanup: \(model) rate-limited for \(Int(limit.retryAfter))s")
+                NSLog("groq: \(model) rate-limited for \(Int(limit.retryAfter))s")
                 await cooldowns.cool(model, for: limit.retryAfter)
             } catch {
-                NSLog("cleanup failed on \(model): \(error)")
+                NSLog("groq request failed on \(model): \(error)")
             }
         }
-        return BasicCleanup.apply(transcript)
+        return nil
     }
 
-    private static func groq(_ transcript: String, appName: String?, appBundle: String?, vocabulary: [String],
-                             edits: [(before: String, after: String)], apiKey: String, model: String,
+    private static func groq(system: String, user: String, apiKey: String, model: String,
                              timeout: TimeInterval) async throws -> String {
         var payload: [String: Any] = [
             "model": model,
             "temperature": 0,
             "max_completion_tokens": 2048,
             "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": userMessage(transcript, appName: appName, appBundle: appBundle,
-                                                        vocabulary: vocabulary, edits: edits)],
+                ["role": "system", "content": system],
+                ["role": "user", "content": user],
             ],
         ]
         if model.hasPrefix("openai/gpt-oss") {
