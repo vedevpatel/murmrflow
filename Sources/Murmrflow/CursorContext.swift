@@ -37,6 +37,18 @@ struct CursorContext {
                              element: element, location: start)
     }
 
+    enum Selection { case text(String), none, unknown }
+
+    /// What is selected in the focused field: its text, nothing, or `unknown` when the app does not say.
+    static func selection() -> Selection {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.1)
+        guard let element: AXUIElement = attribute(system, kAXFocusedUIElementAttribute),
+              (attribute(element, kAXSubroleAttribute) as String?) != kAXSecureTextFieldSubrole,
+              let text: String = attribute(element, kAXSelectedTextAttribute) else { return .unknown }
+        return text.isEmpty ? .none : .text(text)
+    }
+
     /// The whole text of a field, or nil once it is gone or stops answering.
     static func value(of element: AXUIElement) -> String? {
         attribute(element, kAXValueAttribute)
