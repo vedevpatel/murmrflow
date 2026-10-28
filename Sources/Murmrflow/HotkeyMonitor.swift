@@ -2,13 +2,18 @@ import AppKit
 import ApplicationServices
 
 /// Push-to-talk on the Right Option key, observed through a listen-only event tap.
+/// Holding Shift as well asks for Command Mode.
 final class HotkeyMonitor {
-    var onPress: (() -> Void)?
+    /// Whether Shift was down when Right Option was pressed.
+    var onPress: ((_ withShift: Bool) -> Void)?
     var onRelease: (() -> Void)?
+    /// Shift pressed while Right Option is held.
+    var onShift: (() -> Void)?
     /// Any key typed by the user, without saying which; Murmrflow's own simulated paste is left out.
     var onKeyDown: (() -> Void)?
 
     private static let rightOptionKeyCode: Int64 = 61
+    private static let shiftKeyCodes: Set<Int64> = [56, 60]
     private var tap: CFMachPort?
     private var held = false
 
@@ -51,12 +56,18 @@ final class HotkeyMonitor {
             if event.getIntegerValueField(.eventSourceUnixProcessID) != Int64(getpid()) { onKeyDown?() }
             return
         }
-        guard type == .flagsChanged,
-              event.getIntegerValueField(.keyboardEventKeycode) == Self.rightOptionKeyCode else { return }
+        guard type == .flagsChanged else { return }
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        if Self.shiftKeyCodes.contains(code) {
+            if held, event.flags.contains(.maskShift) { DispatchQueue.main.async { self.onShift?() } }
+            return
+        }
+        guard code == Self.rightOptionKeyCode else { return }
         let down = event.flags.contains(.maskAlternate)
         if down && !held {
             held = true
-            DispatchQueue.main.async { self.onPress?() }
+            let shift = event.flags.contains(.maskShift)
+            DispatchQueue.main.async { self.onPress?(shift) }
         } else if !down && held {
             held = false
             DispatchQueue.main.async { self.onRelease?() }
