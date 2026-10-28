@@ -14,8 +14,12 @@ final class AudioRecorder {
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                           sampleRate: AudioRecorder.sampleRate,
                                           channels: 1, interleaved: true)!
+    /// Auto gain and loudness measurement for the current recording; kept after `stop()` for the last phrase.
+    private(set) var level = VoiceLevel(mic: "default")
 
-    func start() throws {
+    /// `handsFree` keeps auto gain from lifting the room above the speech server's floor; see VoiceLevel.
+    func start(handsFree: Bool) throws {
+        level = VoiceLevel(mic: VoiceLevel.currentMic, handsFree: handsFree)
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         converter = AVAudioConverter(from: inFormat, to: outFormat)
@@ -28,7 +32,7 @@ final class AudioRecorder {
         try engine.start()
     }
 
-    /// Stops capture and returns everything recorded since `start()`.
+    /// Stops capture and returns everything recorded since `start()`, with auto gain applied.
     func stop() -> [Int16] {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
@@ -51,9 +55,9 @@ final class AudioRecorder {
             return buffer
         }
         guard error == nil, let data = out.int16ChannelData else { return }
-        let chunk = UnsafeBufferPointer(start: data[0], count: Int(out.frameLength))
+        let chunk = level.process(UnsafeBufferPointer(start: data[0], count: Int(out.frameLength)))
         lock.lock(); samples.append(contentsOf: chunk); lock.unlock()
-        onChunk?(Data(buffer: chunk))
+        chunk.withUnsafeBufferPointer { onChunk?(Data(buffer: $0)) }
     }
 
     static func wav(from samples: [Int16]) -> Data {
