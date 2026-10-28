@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let stateItem = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private let lastItem = NSMenuItem(title: "No dictation yet", action: #selector(copyLast), keyEquivalent: "")
+    private let basicItem = NSMenuItem(title: "Basic", action: #selector(chooseBasic), keyEquivalent: "")
+    private let aiItem = NSMenuItem(title: "AI cleanup", action: #selector(chooseAI), keyEquivalent: "")
     private let recorder = AudioRecorder()
     private let hotkey = HotkeyMonitor()
     private lazy var client = ASRClient(port: port)
@@ -123,7 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !text.isEmpty else { return }
         finalsText += (finalsText.isEmpty ? "" : " ") + text
         overlay.update("")
-        if !buffering { paste(PersonalDictionary.shared.apply(text)) }
+        // Basic mode: tidied by rules and pasted phrase by phrase while the speaker keeps talking.
+        if !buffering {
+            let tidied = PersonalDictionary.shared.apply(BasicCleanup.apply(text))
+            if !tidied.isEmpty { paste(tidied) }
+        }
     }
 
     /// The transcript is complete: rewrite and paste it if it was held back, then record the dictation.
@@ -253,6 +259,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stateItem.isEnabled = false
         menu.addItem(stateItem)
         menu.addItem(.separator())
+        let modeHeader = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
+        modeHeader.isEnabled = false
+        menu.addItem(modeHeader)
+        for item in [basicItem, aiItem] {
+            item.target = self
+            item.indentationLevel = 1
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.delegate = self
         lastItem.target = self
         menu.addItem(lastItem)
         let dash = NSMenuItem(title: "Open Dashboard…", action: #selector(openDashboard), keyEquivalent: "d")
@@ -280,6 +296,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stateItem.title = text
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
     }
+
+    @objc private func chooseBasic() { CleanupSettings.shared.enabled = false }
+    @objc private func chooseAI() { CleanupSettings.shared.enabled = true }
 
     @objc private func toggleLaunchAtLogin() {
         let service = SMAppService.mainApp
@@ -320,5 +339,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func projectRoot() -> String {
         Bundle.main.object(forInfoDictionaryKey: "MurmrflowRoot") as? String
             ?? FileManager.default.currentDirectoryPath
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    /// The mode can also change in the dashboard, so the checkmarks are refreshed each time the menu opens.
+    func menuWillOpen(_ menu: NSMenu) {
+        let settings = CleanupSettings.shared
+        basicItem.state = settings.enabled ? .off : .on
+        aiItem.state = settings.enabled ? .on : .off
+        aiItem.title = settings.hasKey ? "AI cleanup" : "AI cleanup (add a Groq key in Settings)"
     }
 }
