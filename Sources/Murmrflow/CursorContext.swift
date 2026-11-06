@@ -113,9 +113,27 @@ struct CursorContext {
     }
 
     /// Whether the word is an ordinary lowercase English word rather than a name or made-up term;
-    /// nil when the system word list is missing.
+    /// nil when the system word list is missing. The list has "thing" and "want" but few inflections,
+    /// so "things" and "wants" are looked up by their stems too.
     static func isCommonWord(_ word: String) -> Bool? {
-        wordList.map { $0.range(of: Data("\n\(word.lowercased())\n".utf8)) != nil }
+        wordList.map { list in stems(of: word.lowercased()).contains { list.range(of: Data("\n\($0)\n".utf8)) != nil } }
+    }
+
+    /// The word and what it may be an inflection of: "studies" -> "study", "making" -> "make", "running" -> "run".
+    private static func stems(of word: String) -> [String] {
+        var out = [word]
+        func strip(_ suffix: String, adding added: String = "") {
+            guard word.hasSuffix(suffix), word.count > suffix.count + 2 else { return }
+            let stem = String(word.dropLast(suffix.count))
+            out.append(stem + added)
+            // A doubled final consonant came from the inflection: "running", "stopped".
+            if (suffix == "ing" || suffix == "ed"), added.isEmpty, stem.count > 2, stem.last == stem.dropLast().last {
+                out.append(String(stem.dropLast()))
+            }
+        }
+        strip("s"); strip("es"); strip("ies", adding: "y"); strip("ed"); strip("ed", adding: "e")
+        strip("ing"); strip("ing", adding: "e"); strip("ly")
+        return out
     }
 
     /// One word per line; ordinary words are lowercase and proper nouns capitalized.
