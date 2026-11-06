@@ -14,7 +14,7 @@ struct ASRClient {
     }
 
     /// `hotwords` are names and terms the decoder should favour; the server takes at most 25.
-    func transcribe(wav: Data, hotwords: [String] = []) async throws -> String {
+    func transcribe(wav: Data, hotwords: [String] = [], timeout: TimeInterval = 60) async throws -> String {
         let boundary = "murmrflow-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -32,7 +32,7 @@ struct ASRClient {
 
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/audio/transcriptions"))
         req.httpMethod = "POST"
-        req.timeoutInterval = 60
+        req.timeoutInterval = timeout
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
 

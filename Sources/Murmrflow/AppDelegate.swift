@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var silenceTimer: Timer?
     /// Drops other voices in the room during hands-free; nil while dictating with the key held.
     private var gate: PhraseGate?
+    /// The gate dropped a phrase from this recording, so the recording as a whole holds speech that must not be pasted.
+    private var gateDropped = false
     private static let doubleTapGap: TimeInterval = 0.4
     private static let handsFreeSilence: TimeInterval = 60
 
@@ -125,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         targetAppBundle = target?.bundleIdentifier
         commandMode = command
         gate = nil
+        gateDropped = false
         overlay.title = command ? "Command" : nil
         selectionTask = command ? captureSelection() : nil
         let stream = StreamingSession(port: port)
@@ -226,6 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let accepted = gate.accept(level)
             self.gate = gate
             guard accepted else {
+                gateDropped = true
                 NSLog("hands-free: dropped a phrase too quiet to be the speaker (level \(level))")
                 overlay.update("")
                 return
@@ -311,7 +315,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if finalsText.isEmpty {
             commit(full, from: .end)
         }
-        finishDictation()
+        // A phrase the gate dropped is still in the audio, so a whole-recording pass would bring it back.
+        guard buffering, !gateDropped, !finalsText.isEmpty, !pendingSamples.isEmpty else { return finishDictation() }
+        retranscribeWhole()
+    }
+
+    /// A held-back dictation is decoded again in one pass over the whole recording before it is cleaned up.
+    /// The live phrases were each decoded alone, cut at every pause, so they end in a period wherever the speaker
+    /// paused and miss the words around them; they also go without the personal dictionary's hotwords. Takes about
+    /// half a second for 20 s of speech. The live phrases stay if the pass fails.
+    private func retranscribeWhole() {
+        let wav = AudioRecorder.wav(from: pendingSamples)
+        let timeout = max(5, dictationSeconds * 0.25)
+        // Keeps a new recording from starting, and resetting the transcript, before this one is finished.
+        cleaning = true
+        Task {
+            let whole: String?
+            do {
+                whole = try await client.transcribe(wav: wav, hotwords: PersonalDictionary.shared.terms, timeout: timeout)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                NSLog("whole-recording transcription failed, keeping the live phrases: \(error)")
+                whole = nil
+            }
+            await MainActor.run {
+                self.cleaning = false
+                if let whole, !whole.isEmpty { self.finalsText = whole }
+                self.finishDictation()
+            }
+        }
     }
 
     private func streamError(_ error: Error) {
