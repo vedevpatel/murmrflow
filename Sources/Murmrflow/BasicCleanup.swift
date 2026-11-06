@@ -3,7 +3,9 @@ import Foundation
 /// Basic mode: rule-based tidying done on this Mac, with no model and no network. It is instant and
 /// predictable, so each phrase can be pasted as soon as it is spoken. It is also what AI cleanup falls back to.
 enum BasicCleanup {
-    static func apply(_ text: String) -> String {
+    /// `afterEarlierPhrase` is a live phrase that follows others in the same dictation. The recognizer cuts the audio
+    /// at every pause and starts the next piece lowercase when it hears the sentence carrying on, so that is kept.
+    static func apply(_ text: String, afterEarlierPhrase: Bool = false) -> String {
         var s = text
         s = removingFillers(s)
         s = removingRepeats(s)
@@ -11,7 +13,7 @@ enum BasicCleanup {
         s = tidyingSpacing(s)
         // Only filler was spoken: nothing is left but the punctuation around it.
         guard s.contains(where: { $0.isLetter || $0.isNumber }) else { return "" }
-        return capitalizingSentences(s)
+        return capitalizingSentences(s, keepingStart: afterEarlierPhrase && s.first?.isLowercase == true)
     }
 
     /// "I, um, think" -> "I think"; the commas the recognizer put around a filler go with it.
@@ -64,14 +66,14 @@ enum BasicCleanup {
             .trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
     }
 
-    /// A capital at the start and after each sentence end, and "I" on its own. Cursor fitting lowercases the
-    /// first word again when the phrase continues a sentence already in the field.
-    private static func capitalizingSentences(_ s: String) -> String {
+    /// A capital at the start (unless `keepingStart`) and after each sentence end, and "I" on its own. Cursor fitting
+    /// lowercases the first word again when the phrase continues a sentence already in the field.
+    private static func capitalizingSentences(_ s: String, keepingStart: Bool) -> String {
         // A period ending an abbreviation like "i.e." or "e.g." does not end the sentence.
         let regex = try! NSRegularExpression(pattern: #"(^|(?<!\.[A-Za-z])[.!?]\s+|\n)([a-z])"#)
         var out = s
         for match in regex.matches(in: s, range: NSRange(s.startIndex..., in: s)).reversed() {
-            guard let letter = Range(match.range(at: 2), in: s) else { continue }
+            guard let letter = Range(match.range(at: 2), in: s), !(keepingStart && match.range(at: 2).location == 0) else { continue }
             out.replaceSubrange(letter, with: s[letter].uppercased())
         }
         return out.replacingOccurrences(of: #"\bi(?=['\s,;:!?]|\.(?!\w)|$)"#, with: "I", options: .regularExpression)

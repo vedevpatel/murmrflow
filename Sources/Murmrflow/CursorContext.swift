@@ -71,6 +71,12 @@ struct CursorContext {
         return value as? String
     }
 
+    /// Stands in for a field that can't be read (Chrome, Electron apps): `earlier`, the phrases already pasted in this
+    /// dictation, followed by the space each paste ends with. Nil for the first phrase, which has nothing before it.
+    static func following(_ earlier: String) -> CursorContext? {
+        earlier.isEmpty ? nil : CursorContext(before: String(earlier.suffix(200)) + " ", after: "")
+    }
+
     /// The dictation adjusted to its surroundings: a space before it when it follows a word, a lowercase
     /// first word when it continues a sentence, and no period of its own when it lands mid-sentence.
     func fit(_ text: String) -> String {

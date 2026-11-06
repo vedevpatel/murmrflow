@@ -116,7 +116,9 @@ enum Cleanup {
             return true
         }
         guard let cleaned else { return BasicCleanup.apply(transcript) }
-        return cleaned == "EMPTY" ? "" : cleaned
+        // The model also answers EMPTY for a lone "yes", "okay" or "hello". Basic's rules leave nothing only when
+        // filler alone was spoken, so they decide whether the dictation really was empty.
+        return cleaned == "EMPTY" ? BasicCleanup.apply(transcript) : cleaned
     }
 
     /// Asks the chosen model, then each fallback, until one gives an answer `accept`s within `timeout`.
@@ -266,7 +268,7 @@ enum Cleanup {
         2. Errands: Bank and post office
         3. Call Mom
         
-        Output only the cleaned text, with no preamble, quotes, labels, or commentary. If the transcript is empty or only filler, output exactly: EMPTY
+        Output only the cleaned text, with no preamble, quotes, labels, or commentary. If the transcript is empty or only filler sounds (um, uh, hmm), output exactly: EMPTY. A short real word such as "yes", "no", "okay", or "hello" is not filler: clean it like any other text.
         """
 
     /// Catches the model replying to the transcript instead of cleaning it.

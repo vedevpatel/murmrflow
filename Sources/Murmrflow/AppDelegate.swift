@@ -237,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.update("")
         // Basic mode: tidied by rules and pasted phrase by phrase while the speaker keeps talking.
         if !buffering {
-            let tidied = PersonalDictionary.shared.apply(BasicCleanup.apply(text))
+            let tidied = PersonalDictionary.shared.apply(BasicCleanup.apply(text, afterEarlierPhrase: !lastText.isEmpty))
             if !tidied.isEmpty { paste(tidied) }
         }
     }
@@ -354,13 +354,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// `whole` is a complete cleaned dictation rather than one streamed phrase of it.
     private func paste(_ text: String, whole: Bool = false) {
+        let earlier = lastText
         lastText += (lastText.isEmpty ? "" : " ") + text
         lastItem.title = "Last: " + String(text.prefix(50))
         let kind = AppKind(bundle: targetAppBundle)
         var out = whole && kind == .chat ? CursorContext.droppingChatPeriod(text) : text
         let context = CursorContext.read()
-        // Without a readable field, a trailing space keeps the next dictation from running into this one.
-        out = context?.fit(out) ?? out + " "
+        // Without a readable field, the phrases pasted earlier in this dictation say what comes before, so a phrase
+        // after a pause still carries on the sentence. A trailing space keeps the next one from running into this one.
+        out = context?.fit(out) ?? (CursorContext.following(earlier)?.fit(out) ?? out) + " "
         let rich = kind == .general || kind == .email ? RichText.flavors(for: out) : nil
         // A pasted list reads back without its "1." markers, which would look like edits.
         if insert(out, rich: rich), let context, rich == nil, StatsStore.shared.learnFromEdits {
