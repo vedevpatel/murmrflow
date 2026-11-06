@@ -16,8 +16,11 @@ final class EditLearner {
         let bundle: String?
         let whole: Bool
         let started = Date()
-        /// The dictation as last seen in the field; kept when the field is later cleared, e.g. a sent chat message.
+        /// The dictation as last seen unchanged across two polls; kept when the field is later cleared, e.g. a sent
+        /// chat message. A version seen only once may be half typed ("O ofn" on the way to "O(n)").
         var latest: String?
+        /// The dictation at the previous poll.
+        var seen: String?
         /// Whether the user typed in the target app since the paste. Changes without typing came from
         /// somewhere else (a collaborator, autocorrect, the app reformatting) and are not learned from.
         var typed = false
@@ -59,7 +62,8 @@ final class EditLearner {
     private func poll() {
         guard var w = watch else { return }
         if let value = CursorContext.value(of: w.element), let region = Self.region(in: value, of: w) {
-            w.latest = region
+            if region == w.seen { w.latest = region }
+            w.seen = region
             watch = w
         }
         if Date().timeIntervalSince(w.started) > Self.duration { finish() }
