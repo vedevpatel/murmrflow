@@ -118,14 +118,15 @@ final class EditLearner {
         return similarity(heard, term) >= 0.5 ? (term, heard) : nil
     }
 
-    /// A fix worth repeating: punctuation or capitalization, dropping a few words, or a close respelling.
-    /// Changes to dates and numbers are changes of content, so they are never learned beyond punctuation.
+    /// A fix worth repeating: punctuation or capitalization, or a close respelling. Changes to dates and numbers are
+    /// changes of content, so they are never learned beyond punctuation. Deleted words aren't learned either: cutting
+    /// "I'm" from one message is a choice about that message, and as an example it taught the model to drop
+    /// lead-ins everywhere. Fillers and repeats are the cleanup prompt's job.
     private static func isFix(_ h: WordDiff.Hunk) -> Bool {
         let old = h.old.joined(separator: " "), new = h.new.joined(separator: " ")
         if !h.old.isEmpty, !h.new.isEmpty, core(old).lowercased() == core(new).lowercased() { return true }
         if isAboutContent(h) { return false }
-        if h.new.isEmpty { return h.old.count <= 3 }
-        guard !h.old.isEmpty, h.old.count <= 3, h.new.count <= 3 else { return false }
+        guard !h.old.isEmpty, !h.new.isEmpty, h.old.count <= 3, h.new.count <= 3 else { return false }
         return similarity(core(old), core(new)) >= 0.5
     }
 
