@@ -257,7 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let raw = finalsText
         let dictionary = PersonalDictionary.shared
-        let edits = StatsStore.shared.learnFromEdits ? StatsStore.shared.recentCorrections(for: AppKind(bundle: targetAppBundle)) : []
+        let edits = StatsStore.shared.learnFromEdits
+            ? StatsStore.shared.recentCorrections(for: AppKind(bundle: targetAppBundle), relevantTo: raw) : []
         cleaning = true
         Task {
             // Applied after cleanup as well, since the model can still re-case or re-split a term.

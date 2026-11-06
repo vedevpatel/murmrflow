@@ -131,13 +131,29 @@ final class StatsStore: ObservableObject {
                     [Date().timeIntervalSince1970, bundle, before, after])
     }
 
-    /// The latest learned fixes, those made in the same kind of app first.
-    func recentCorrections(for kind: AppKind, limit: Int = 6) -> [(before: String, after: String)] {
+    /// The latest learned fixes whose changed words come up in `transcript`, those made in the same kind of app
+    /// first. A fix shown with unrelated text gets generalized by the model: a deleted "I'm" taught it to drop
+    /// every lead-in.
+    func recentCorrections(for kind: AppKind, relevantTo transcript: String, limit: Int = 6) -> [(before: String, after: String)] {
         let rows = (try? db?.query("SELECT before_text, after_text, app_bundle FROM corrections ORDER BY created_at DESC LIMIT 50") { s in
             (before: Database.text(s, 0) ?? "", after: Database.text(s, 1) ?? "", kind: AppKind(bundle: Database.text(s, 2)))
         }) ?? []
-        let sameKind = rows.filter { $0.kind == kind }, others = rows.filter { $0.kind != kind }
+        let spoken = Set(Self.plainWords(transcript))
+        let relevant = rows.filter { !Self.changedWords(before: $0.before, after: $0.after).isDisjoint(with: spoken) }
+        let sameKind = relevant.filter { $0.kind == kind }, others = relevant.filter { $0.kind != kind }
         return (sameKind + others).prefix(limit).map { ($0.before, $0.after) }
+    }
+
+    /// The words of `before` that the fix changed, or all of them when it only added words.
+    private static func changedWords(before: String, after: String) -> Set<String> {
+        let old = EditLearner.words(before)
+        let changed = WordDiff(old: old, new: EditLearner.words(after)).hunks.flatMap(\.old)
+        return Set(plainWords((changed.isEmpty ? old : changed).joined(separator: " ")))
+    }
+
+    private static func plainWords(_ text: String) -> [String] {
+        EditLearner.words(text).map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.symbols)) }
+            .filter { !$0.isEmpty }
     }
 
     func deleteAll() {
