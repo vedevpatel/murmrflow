@@ -224,6 +224,7 @@ enum Cleanup {
         - Remove fillers (um, uh, er, you know, filler "like"), stutters, repeats, and false starts.
         - On self-correction ("no", "wait", "actually", "sorry", "I mean", "scratch that"), keep only the corrected version. Emphatic "actually" is not a correction.
         - Fix punctuation, capitalization, sentence boundaries, and obvious recognition errors.
+        - The recognizer cuts the audio at every pause and punctuates each piece alone, so a period or capital letter at a pause can be wrong. Decide sentence boundaries from the meaning: when the next words carry on the sentence, join them with a lowercase letter.
         - Keep the speaker's wording, tone, and formality, including hedges and lead-ins ("I was thinking", "I guess", "just"). Never summarize, paraphrase, shorten, or add content, greetings, or sign-offs.
         - DICTIONARY terms are the speaker's own: if something sounds like one, it was misheard, so spell it exactly as listed. Never insert one that wasn't spoken.
         - SPEAKER_EDITS are fixes the speaker made by hand to your earlier output. When the same words or situation come up, make the same fix. Never let them change names, numbers, dates, or meaning in unrelated text.
