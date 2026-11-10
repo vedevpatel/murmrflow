@@ -125,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = NSWorkspace.shared.frontmostApplication
         targetAppName = target?.localizedName
         targetAppBundle = target?.bundleIdentifier
+        CursorContext.exposeText(of: target)
         commandMode = command
         gate = nil
         gateDropped = false
@@ -393,6 +394,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let kind = AppKind(bundle: targetAppBundle)
         var out = whole && kind == .chat ? CursorContext.droppingChatPeriod(text) : text
         let context = CursorContext.read()
+        // Which characters sit before the caret (code points only, not your text), to see why a first word was or was not lowercased.
+        NSLog("paste into \(targetAppBundle ?? "?"): field \(context == nil ? "unreadable" : "read"), before ends \(context?.before.suffix(3).unicodeScalars.map { String($0.value, radix: 16) } ?? [])")
         // Without a readable field, the phrases pasted earlier in this dictation say what comes before, so a phrase
         // after a pause still carries on the sentence. A trailing space keeps the next one from running into this one.
         out = context?.fit(out) ?? (CursorContext.following(earlier)?.fit(out) ?? out) + " "

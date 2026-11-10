@@ -10,6 +10,17 @@ struct CursorContext {
     var element: AXUIElement? = nil
     var location = 0
 
+    private static var exposed = Set<pid_t>()
+
+    /// Chrome and Electron apps only build their accessibility tree once asked, and until then their text fields
+    /// cannot be read. Asking when a dictation starts leaves the tree ready by the time the first phrase is pasted.
+    static func exposeText(of app: NSRunningApplication?) {
+        guard let pid = app?.processIdentifier, exposed.insert(pid).inserted else { return }
+        let element = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(element, 0.1)
+        AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    }
+
     /// Nil when the focused element exposes no text (or is a password field), or does not answer quickly.
     static func read() -> CursorContext? {
         let system = AXUIElementCreateSystemWide()
@@ -81,18 +92,25 @@ struct CursorContext {
     /// first word when it continues a sentence, and no period of its own when it lands mid-sentence.
     func fit(_ text: String) -> String {
         var out = text
-        let line = before.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
+        // Editors often put a non-breaking space or a zero-width character where a plain space would be.
+        let before = Self.withoutInvisible(before), after = Self.withoutInvisible(after)
+        let line = String(before.reversed().drop { $0.isWhitespace && !$0.isNewline }.reversed())
         if let last = line.last, !last.isNewline {
             if last.isLetter || last.isNumber || ",;-–—)".contains(last) { out = Self.lowercasingFirstWord(out, after: before) }
             let opener = "([{\"“‘'/@#".contains(last)
             if !opener, let c = before.last, !c.isWhitespace { out = " " + out }
         }
-        let next = after.first { $0 != " " && $0 != "\t" }
+        let next = after.first { !$0.isWhitespace || $0.isNewline }
         if let next, next.isLowercase || next.isNumber || ",;:".contains(next) || (next == "." && after.first == ".") {
             out = Self.droppingFinalPeriod(out)
         }
         if let first = after.first, first.isLetter || first.isNumber { out += " " }
         return out
+    }
+
+    /// The text without zero-width characters, which take up room in a field but show nothing.
+    private static func withoutInvisible(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter { ![0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF].contains($0.value) }))
     }
 
     /// Lowercases "Then" in "…and Then", but leaves "I", acronyms and names alone. A word counts as a name
@@ -116,8 +134,12 @@ struct CursorContext {
     /// nil when the system word list is missing. The list has "thing" and "want" but few inflections,
     /// so "things" and "wants" are looked up by their stems too.
     static func isCommonWord(_ word: String) -> Bool? {
-        wordList.map { list in stems(of: word.lowercased()).contains { list.range(of: Data("\n\($0)\n".utf8)) != nil } }
+        if spokenWords.contains(word.lowercased()) { return true }
+        return wordList.map { list in stems(of: word.lowercased()).contains { list.range(of: Data("\n\($0)\n".utf8)) != nil } }
     }
+
+    /// Everyday spoken words the system list leaves out.
+    private static let spokenWords: Set = ["okay", "ok", "yeah", "yep", "yup", "nope", "alright", "gonna", "wanna", "gotta"]
 
     /// The word and what it may be an inflection of: "studies" -> "study", "making" -> "make", "running" -> "run".
     private static func stems(of word: String) -> [String] {
